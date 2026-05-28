@@ -6,3 +6,9 @@ dist
 .env
 .env.local
 .env.*.local
+
+# Firebase / GCP service-account credentials
+*firebase-adminsdk*.json
+*service-account*.json
+serviceAccountKey.json
+gcp-key*.json

@@ -1,0 +1,19 @@
+rules_version = '2';
+
+// VibeMenu Storage rules.
+// Generated dish images live under /dish-images/ and need to be readable by
+// anyone (the public URLs are embedded in our menu UI). Writes only happen
+// via the Firebase Admin SDK in our server routes, which bypasses these
+// rules — so no public write rule is exposed.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /dish-images/{file=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

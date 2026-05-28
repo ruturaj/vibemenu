@@ -1,7 +1,10 @@
 import { generateObject, generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 
+import { getCachedMenu, saveCachedMenu } from "@/lib/cache/menu-cache";
+import { menuCacheKey } from "@/lib/cache/keys";
 import { fallbackParse } from "@/lib/fallback";
+import { isMenuText } from "@/lib/guardrail";
 import { getKnownDomainParser } from "@/lib/parsers";
 import { MenuSchema } from "@/lib/schemas";
 import type { ParseInput } from "@/types";
@@ -84,12 +87,22 @@ export async function POST(request: Request): Promise<Response> {
     const openAiKey =
       request.headers.get("X-Provider-OpenAI-Key")?.trim() || process.env.OPENAI_API_KEY?.trim() || "";
 
+    // Tier 1: Whole-menu cache lookup (any input type).
+    const cacheKey = menuCacheKey(body);
+    if (cacheKey) {
+      const cached = await getCachedMenu(cacheKey);
+      if (cached) {
+        return Response.json({ ...cached, _cache: "menu-hit" });
+      }
+    }
+
     // Known-domain fast path: skip OCR/LLM, transform structured data directly.
     if (body.inputType === "url" && body.url) {
       const parser = getKnownDomainParser(body.url);
       if (parser) {
         try {
           const menu = await parser.parse(body.url);
+          if (cacheKey) void saveCachedMenu(cacheKey, menu, parser.name);
           return Response.json(menu);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Domain parser failed";
@@ -114,6 +127,20 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json(fallbackParse(sourceText));
     }
 
+    // Guardrail: only for raw text + unknown URLs (skip image OCR + known-domain parsers).
+    if (body.inputType === "text" || body.inputType === "url") {
+      const guard = await isMenuText(sourceText, openAiKey);
+      if (!guard.isMenu) {
+        return Response.json(
+          {
+            error: "This does not look like a restaurant menu.",
+            reason: guard.rejectionReason || "Guardrail rejection"
+          },
+          { status: 422 }
+        );
+      }
+    }
+
     const openai = createOpenAI({ apiKey: openAiKey });
 
     const { object } = await generateObject({
@@ -123,6 +150,8 @@ export async function POST(request: Request): Promise<Response> {
       system: STRUCTURE_PROMPT,
       prompt: `Source menu text (verbatim from OCR or original document):\n\n${sourceText.slice(0, 30000)}`
     });
+
+    if (cacheKey) void saveCachedMenu(cacheKey, object, body.inputType);
 
     return Response.json(object);
   } catch (error) {

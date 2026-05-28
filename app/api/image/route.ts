@@ -6,6 +6,10 @@ type ImageBody = {
   visualPrompt?: string;
 };
 
+import { findSimilarDish, saveDish } from "@/lib/cache/dish-cache";
+import { dataUrlToPngBuffer, uploadGeneratedImage } from "@/lib/cache/image-storage";
+import { buildDishSearchString, getEmbedding } from "@/lib/embeddings";
+
 export const runtime = "nodejs";
 
 function makePlaceholderDataUrl(title: string): string {
@@ -41,6 +45,30 @@ export async function POST(request: Request): Promise<Response> {
 
     if (!openAiKey) {
       return Response.json({ imageUrl: makePlaceholderDataUrl(body.dishName), provider: "placeholder" });
+    }
+
+    // Tier 3: vector lookup — reuse an existing image if a near-identical dish exists.
+    let queryVector: number[] | null = null;
+    try {
+      const search = buildDishSearchString({
+        name: body.dishName,
+        description: body.dishDescription,
+        ingredients: body.ingredients
+      });
+      queryVector = await getEmbedding(search, openAiKey);
+      const match = await findSimilarDish(queryVector);
+      if (match) {
+        return Response.json({
+          imageUrl: match.imageUrl,
+          provider: "cache",
+          cached: true,
+          matchedDish: match.name,
+          distance: match.distance
+        });
+      }
+    } catch (err) {
+      // Embedding failure is non-fatal — fall through to generation.
+      console.warn("[image] embedding/knn skipped:", err instanceof Error ? err.message : err);
     }
 
     const altLine = body.alternateName ? ` (${body.alternateName})` : "";
@@ -121,15 +149,57 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ imageUrl: makePlaceholderDataUrl(body.dishName), provider: "placeholder" });
     }
 
-    if (first.url) {
-      return Response.json({ imageUrl: first.url, provider: "openai" });
-    }
+    // Resolve to a final imageUrl + (optionally) PNG bytes for uploading.
+    let imageUrl: string | null = null;
+    let pngBytes: Buffer | null = null;
 
     if (first.b64_json) {
-      return Response.json({ imageUrl: `data:image/png;base64,${first.b64_json}`, provider: "openai" });
+      pngBytes = Buffer.from(first.b64_json, "base64");
+      imageUrl = `data:image/png;base64,${first.b64_json}`;
+    } else if (first.url) {
+      imageUrl = first.url;
+      // Fetch bytes so we can re-host in our own Storage (OpenAI URLs expire).
+      try {
+        const r = await fetch(first.url);
+        if (r.ok) pngBytes = Buffer.from(await r.arrayBuffer());
+      } catch {
+        // ignore — we'll just return the OpenAI URL directly
+      }
     }
 
-    return Response.json({ imageUrl: makePlaceholderDataUrl(body.dishName), provider: "placeholder" });
+    if (!imageUrl) {
+      return Response.json({ imageUrl: makePlaceholderDataUrl(body.dishName), provider: "placeholder" });
+    }
+
+    // Upload to Firebase Storage so future cache hits serve a stable, public URL.
+    let storedUrl: string | null = null;
+    if (pngBytes) {
+      storedUrl = await uploadGeneratedImage(pngBytes, body.dishName);
+    } else {
+      // b64 path: try one more time to derive bytes (covers the data-url branch)
+      const buf = dataUrlToPngBuffer(imageUrl);
+      if (buf) storedUrl = await uploadGeneratedImage(buf, body.dishName);
+    }
+
+    const finalUrl = storedUrl || imageUrl;
+
+    // Persist embedding + dish metadata for future Tier-3 hits. Fire-and-forget.
+    if (queryVector) {
+      void saveDish({
+        name: body.dishName,
+        description: body.dishDescription,
+        ingredients: body.ingredients,
+        imageUrl: finalUrl,
+        vector: queryVector
+      });
+    }
+
+    return Response.json({
+      imageUrl: finalUrl,
+      provider: "openai",
+      cached: false,
+      stored: storedUrl !== null
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown image error";
     return Response.json({ error: message }, { status: 500 });
