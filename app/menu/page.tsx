@@ -9,12 +9,14 @@ import { MenuCard } from "@/components/menu-card";
 import { useMenuStore, type ImageQueueEntry } from "@/store/useMenuStore";
 
 const MAX_CONCURRENT = 2;
-const MAX_IMAGES = 10;
+// Cap on FRESH (paid) image generations per visit. Cached hits don't count toward this.
+const MAX_NEW_IMAGES = 10;
 
 async function generateImage(
   dish: { id: string; name: string; alternateName?: string; description: string; ingredients: string[]; visualPrompt: string },
-  keys: { openai: string; replicate: string }
-): Promise<{ imageUrl?: string; warning?: string; error?: string; fatal?: boolean }> {
+  keys: { openai: string; replicate: string },
+  cacheOnly: boolean
+): Promise<{ imageUrl?: string; warning?: string; error?: string; fatal?: boolean; cached?: boolean; skipped?: boolean }> {
   try {
     const response = await fetch("/api/image", {
       method: "POST",
@@ -28,7 +30,8 @@ async function generateImage(
         alternateName: dish.alternateName,
         dishDescription: dish.description,
         ingredients: dish.ingredients,
-        visualPrompt: dish.visualPrompt
+        visualPrompt: dish.visualPrompt,
+        cacheOnly
       })
     });
 
@@ -38,6 +41,8 @@ async function generateImage(
       error?: string;
       fatal?: boolean;
       code?: string;
+      cached?: boolean;
+      skipped?: boolean;
     };
 
     if (!response.ok) {
@@ -81,14 +86,15 @@ export default function MenuPage(): React.ReactElement {
     if (startedRef.current) return;
     startedRef.current = true;
 
+    // Queue ALL dishes that need images. Cache hits load freely; fresh generations capped.
     const queue: ImageQueueEntry[] = menu.dishes
       .filter((dish) => !dish.imageUrl)
-      .slice(0, MAX_IMAGES)
       .map((dish) => ({ dishId: dish.id, dishName: dish.name, status: "pending" }));
     setImageQueue(queue);
 
     let index = 0;
     let aborted = false;
+    let freshGenerated = 0;
     const dishesById = new Map(menu.dishes.map((dish) => [dish.id, dish]));
 
     async function worker(): Promise<void> {
@@ -100,14 +106,20 @@ export default function MenuPage(): React.ReactElement {
         const dish = dishesById.get(entry.dishId);
         if (!dish) continue;
 
+        // Once fresh-gen budget is hit, only fetch cached results.
+        const cacheOnly = freshGenerated >= MAX_NEW_IMAGES;
+
         updateQueueEntry(entry.dishId, { status: "in-progress" });
-        const result = await generateImage(dish, keys);
+        const result = await generateImage(dish, keys, cacheOnly);
 
         if (aborted) return;
 
         if (result.imageUrl) {
           patchDish(dish.id, { imageUrl: result.imageUrl });
           updateQueueEntry(entry.dishId, { status: "done" });
+          if (result.cached === false) freshGenerated += 1;
+        } else if (result.skipped) {
+          updateQueueEntry(entry.dishId, { status: "error", error: "Skipped (budget reached)" });
         } else {
           updateQueueEntry(entry.dishId, { status: "error", error: result.error || result.warning });
           if (result.fatal) {

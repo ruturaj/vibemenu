@@ -41,7 +41,7 @@ function fileToBase64(file: File): Promise<string> {
 
 export default function HomePage(): React.ReactElement {
   const router = useRouter();
-  const [urlValue, setUrlValue] = useState("");
+  const [urlValue, setUrlValue] = useState("https://eatoes.com/menu/therabbitholelounge");
   const [textValue, setTextValue] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);

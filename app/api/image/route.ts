@@ -4,6 +4,7 @@ type ImageBody = {
   dishDescription?: string;
   ingredients?: string[];
   visualPrompt?: string;
+  cacheOnly?: boolean;
 };
 
 import { findSimilarDish, saveDish } from "@/lib/cache/dish-cache";
@@ -69,6 +70,11 @@ export async function POST(request: Request): Promise<Response> {
     } catch (err) {
       // Embedding failure is non-fatal — fall through to generation.
       console.warn("[image] embedding/knn skipped:", err instanceof Error ? err.message : err);
+    }
+
+    // If caller only wants cached results (e.g. budget exhausted), don't burn an OpenAI call.
+    if (body.cacheOnly) {
+      return Response.json({ skipped: true, provider: "cache-miss" });
     }
 
     const altLine = body.alternateName ? ` (${body.alternateName})` : "";

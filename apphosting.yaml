@@ -1,0 +1,19 @@
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+
+env:
+  - variable: FIREBASE_STORAGE_BUCKET
+    value: vibemenu-55f2a.firebasestorage.app
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # Secret: create with  firebase apphosting:secrets:set OPENAI_API_KEY
+  - variable: OPENAI_API_KEY
+    secret: OPENAI_API_KEY
+    availability:
+      - RUNTIME

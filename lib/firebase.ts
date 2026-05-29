@@ -31,6 +31,12 @@ function init(): void {
         }),
         storageBucket: bucket
       });
+    } else if (process.env.K_SERVICE || process.env.GOOGLE_CLOUD_PROJECT || process.env.FUNCTION_TARGET) {
+      // Running on Google Cloud (App Hosting / Cloud Run / Functions): use runtime service account via ADC.
+      admin.initializeApp({
+        credential: admin.credential.applicationDefault(),
+        storageBucket: bucket
+      });
     } else {
       initError =
         "Firebase env vars missing. Set GOOGLE_APPLICATION_CREDENTIALS (path to JSON) or FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY.";

@@ -13,7 +13,8 @@ export function menuCacheKey(input: ParseInput): string | null {
     try {
       const u = new URL(input.url);
       const normalized = `${u.host}${u.pathname}`.toLowerCase().replace(/\/+$/, "");
-      return `url:${normalized}`;
+      // Firestore doc IDs cannot contain "/"; encode path separators.
+      return `url:${normalized.replace(/\//g, "__")}`;
     } catch {
       return null;
     }

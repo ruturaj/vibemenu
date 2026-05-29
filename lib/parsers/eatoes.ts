@@ -41,9 +41,10 @@ const slugFromUrl = (url: string): string | null => {
     const u = new URL(url);
     if (!/eatoes\.com$/i.test(u.hostname)) return null;
     const parts = u.pathname.split("/").filter(Boolean);
-    // Expected: /<slug>/menu  OR  /<slug>
+    // Expected: /<slug>/menu  OR  /menu/<slug>  OR  /<slug>
     if (parts.length === 0) return null;
     if (parts[parts.length - 1] === "menu") return parts[parts.length - 2] || null;
+    if (parts[0] === "menu") return parts[1] || null;
     return parts[0] || null;
   } catch {
     return null;
